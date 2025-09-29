@@ -356,50 +356,30 @@ async def perform_analysis_with_mcp(llm, contract_text, document_name, mcp_tools
         
         # Convert extracted values to JSON
         extracted_json = json.dumps(extracted_values, ensure_ascii=False, indent=2)
-        
-        # English prompts (output remains Turkish)
-        system_prompt = """You are a senior Turkish contract lawyer. You have access to legal research tools via MCP.
 
-Objectives:
-- Identify the contract type, parties, and critical clauses.
-- Research the applicable Turkish laws and specific articles using tools.
-- Produce a rigorous analysis with concrete risks and actionable recommendations.
-- Bold all extracted quantitative values (amounts, dates, rates).
+        # Tamamen Türkçe sistem talimatı (MCP araç adları veya uçlar hardcode edilmeden)
+        system_prompt = (
+            "Kıdemli bir Türk sözleşme hukukçususun. Bu oturumda MCP aracılığıyla hukuki araştırma "
+            "araçlarına erişimin var. İhtiyaç duyduğunda uygun araçları kendi inisiyatifinle çağır, "
+            "yanıtlarını özetleyip analizine entegre et. Talimatlar:\n"
+            "- Sözleşme türünü, tarafları ve kritik maddeleri tespit et.\n"
+            "- Uygulanabilir mevzuatı ve ilgili madde numaralarını tespit etmek için hedefli araştırma yap.\n"
+            "- Her atıfta, gerçekten incelediğin madde/metne dayandır ve kaynakları belirt.\n"
+            "- Nicel değerleri (tutarlar, tarihler, oranlar) kalın yaz: ör. **10.000 TL**, **%15**, **01/01/2025**.\n"
+            "- Araç bir hata verirse veya uygun araç yoksa, bu sınırlamayı belirterek en iyi hukuki değerlendirmeyi yap.\n"
+            "Çıktı biçimi: Akıcı Türkçe paragraflar, somut riskler ve uygulanabilir öneriler; sonda önceliklendirilmiş madde işaretli öneriler listesi."
+        )
 
-Tool use policy:
-- Prefer precise, targeted queries (act names, article numbers, keywords).
-- For each cited law, read the relevant article(s) and cite them inline.
-- Keep tool responses concise; summarize and integrate into your analysis.
-- If a tool fails or is unavailable, proceed with best-effort legal reasoning and note the limitation.
-
-Method:
-1) Classify the contract and outline the key legal issues.
-2) Decide which codes apply (e.g., TBK, TTK, KVKK, İİK, etc.).
-3) Use tools to find and read the most relevant articles; cite them.
-4) Analyze obligations, payment terms, penalties, termination, warranties, liabilities, compliance.
-5) Identify risks, ambiguities, and negotiation levers. Provide clear recommendations.
-
-Output style:
-- Write fluent paragraphs in Turkish.
-- Bold quantitative values like amounts, dates, rates (e.g., **10.000 TL**, **%15**, **01/01/2025**).
-- Include direct references to laws/articles you actually reviewed.
-- End with a bullet list of prioritized recommendations.
-
-Do not include private data beyond the provided content. Be accurate and conservative in legal claims."""
-
-        user_prompt = f"""Analyze the following contract. Use MCP tools for targeted legal research when needed.
-
-Extracted values (JSON):
-{extracted_json[:3000]}
-
-Contract text (truncated to fit model limits):
-{contract_text[:MAX_CONTRACT_LENGTH]}
-
-Requirements:
-- Determine the contract type and governing laws.
-- Cite specific Turkish legislation and article numbers for each key issue.
-- Bold all extracted quantitative values.
-- Provide concrete risks and actionable recommendations aligned with Turkish law."""
+        user_prompt = (
+            f"Aşağıdaki sözleşmeyi analiz et. Gerek gördüğünde MCP üzerinden mevzuat ve içtihat araştırması yap.\n\n"
+            f"Çıkarılmış değerler (JSON):\n{extracted_json[:3000]}\n\n"
+            f"Sözleşme metni (model sınırı için kısaltılmış):\n{contract_text[:MAX_CONTRACT_LENGTH]}\n\n"
+            "İstekler:\n"
+            "- Sözleşme türünü ve uygulanacak mevzuatı belirle.\n"
+            "- Her kilit meselede madde numarasıyla birlikte somut mevzuat atıfları yap.\n"
+            "- Tüm nicel değerleri kalın göster.\n"
+            "- Türk hukuku ile uyumlu somut riskler ve uygulanabilir öneriler ver."
+        )
 
         # Let LLM freely use tools
         llm_with_tools = llm.bind_tools(mcp_tools)
@@ -484,9 +464,14 @@ Requirements:
                 logger.error(f"Iteration error: {e}")
                 break
         
-        # If no report yet, request final report
+        # If no report yet, request final report (Türkçe talimat)
         if not report_text:
-            final_prompt = "Synthesize your findings and write the final Turkish legal analysis report now. Integrate the extracted values and tool insights. Bold all quantitative values. Cite each statute/article you relied on. End with prioritized, actionable recommendations."
+            final_prompt = (
+                "Şimdi bulgularını birleştir ve nihai Türkçe hukuki analiz raporunu yaz. "
+                "Çıkarılan değerleri ve araç çıktılarından elde edilen içgörüleri entegre et. "
+                "Tüm nicel değerleri kalın göster. Dayandığın her mevzuat/maddeyi belirt. "
+                "Sonda önceliklendirilmiş, uygulanabilir öneriler listesi ver."
+            )
             final_response = await llm.ainvoke(messages + [HumanMessage(content=final_prompt)])
             base_narrative = "\n\n".join([p for p in report_parts if p.strip()])
             report_text = (base_narrative + ("\n\n" if base_narrative else "") + (final_response.content or "")).strip()

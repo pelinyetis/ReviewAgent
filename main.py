@@ -1,12 +1,10 @@
 import logging
 import os
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, Any
 import json
-import traceback
 import asyncio
 from dotenv import load_dotenv
 import re
-from datetime import datetime
 
 # Load environment variables
 load_dotenv()
@@ -15,7 +13,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_anthropic import ChatAnthropic
 from langgraph.graph import START, END, StateGraph, MessagesState
 from langgraph.types import Command
@@ -68,6 +66,19 @@ def setup_turkish_font():
     return 'Helvetica'
 
 TURKISH_FONT = setup_turkish_font()
+
+# Safe filename helper
+def sanitize_filename(name: str) -> str:
+    name = os.path.basename(str(name)).strip()
+    # Allow letters, numbers, dot, dash, underscore; replace others with underscore
+    name = re.sub(r"[^A-Za-z0-9._\- ]+", "_", name)
+    name = name.replace(" ", "_")
+    if not name or name in {".", ".."}:
+        name = "document"
+    # Avoid hidden files
+    if name.startswith('.'):
+        name = name.lstrip('.') or "document"
+    return name
 
 # UiPath client
 uipath = UiPath()
@@ -201,7 +212,15 @@ def extract_contract_values(contract_text: str) -> Dict[str, Any]:
 
 async def prepare_input(state: GraphState) -> Command:
     """Prepare input by downloading and extracting text from PDF"""
-    graph_input = GraphInput(document_name=state["document_name"])
+    raw_document_name = state["document_name"]
+    safe_document_name = sanitize_filename(raw_document_name)
+
+    graph_input = GraphInput(
+        document_name=safe_document_name,
+        bucket_name=state.get("bucket_name"),
+        folder_path=state.get("folder_path"),
+        output_path=state.get("output_path"),
+    )
     
     # Use environment variables or provided values
     bucket_name = graph_input.bucket_name or UIPATH_BUCKET_NAME
@@ -265,6 +284,10 @@ async def analyze_and_generate_report(state: GraphState) -> Command:
     if not contract_text:
         return Command(update={"report_text": "Sözleşme metni bulunamadı"})
     
+    # Validate environment for LLM usage
+    if not ANTHROPIC_API_KEY:
+        return Command(update={"report_text": "ANTHROPIC_API_KEY bulunamadı. Lütfen ortam değişkenini ayarlayın ve tekrar deneyin."})
+
     # Initialize LLM
     llm = ChatAnthropic(
         model="claude-3-5-sonnet-20241022",
@@ -334,39 +357,49 @@ async def perform_analysis_with_mcp(llm, contract_text, document_name, mcp_tools
         # Convert extracted values to JSON
         extracted_json = json.dumps(extracted_values, ensure_ascii=False, indent=2)
         
-        # Dynamic system prompt - let LLM decide everything
-        system_prompt = """Sen Türk hukuku konusunda uzman bir hukuk müşavirisin. Türk mevzuat veritabanına erişimin var.
+        # English prompts (output remains Turkish)
+        system_prompt = """You are a senior Turkish contract lawyer. You have access to legal research tools via MCP.
 
-MEVZUAT ARAÇLARI:
-Aşağıdaki araçları kullanarak Türk mevzuatını araştırabilirsin:
-- search_mevzuat: Anahtar kelimelerle mevzuat ara
-- get_mevzuat_article_tree: Kanunun madde yapısını gör
-- get_mevzuat_article_content: Madde içeriğini oku
+Objectives:
+- Identify the contract type, parties, and critical clauses.
+- Research the applicable Turkish laws and specific articles using tools.
+- Produce a rigorous analysis with concrete risks and actionable recommendations.
+- Bold all extracted quantitative values (amounts, dates, rates).
 
-ANALİZ SÜRECİ:
-1. Sözleşmeyi incele, türünü ve kritik noktalarını belirle
-2. Hangi kanunların uygulanacağına karar ver
-3. İlgili mevzuatı araştır (araçları kullan)
-4. Sözleşmeden çıkarılan değerleri kullanarak detaylı analiz yap
-5. Riskleri ve önerileri belirle
+Tool use policy:
+- Prefer precise, targeted queries (act names, article numbers, keywords).
+- For each cited law, read the relevant article(s) and cite them inline.
+- Keep tool responses concise; summarize and integrate into your analysis.
+- If a tool fails or is unavailable, proceed with best-effort legal reasoning and note the limitation.
 
-Sözleşmenin gerektirdiği derinlikte araştırma yap. Neyin araştırılacağına, hangi maddelerin inceleneceğine sen karar ver.
+Method:
+1) Classify the contract and outline the key legal issues.
+2) Decide which codes apply (e.g., TBK, TTK, KVKK, İİK, etc.).
+3) Use tools to find and read the most relevant articles; cite them.
+4) Analyze obligations, payment terms, penalties, termination, warranties, liabilities, compliance.
+5) Identify risks, ambiguities, and negotiation levers. Provide clear recommendations.
 
-RAPOR YAZIMI:
-- Akıcı paragraflar halinde yaz
-- Çıkarılan değerleri (tutarlar, tarihler, oranlar) **kalın** olarak vurgula
-- Araştırdığın kanun maddelerini doğrudan referans ver
-- Somut riskler ve çözüm önerileri sun"""
+Output style:
+- Write fluent paragraphs in Turkish.
+- Bold quantitative values like amounts, dates, rates (e.g., **10.000 TL**, **%15**, **01/01/2025**).
+- Include direct references to laws/articles you actually reviewed.
+- End with a bullet list of prioritized recommendations.
 
-        user_prompt = f"""Bu sözleşmeyi analiz et:
+Do not include private data beyond the provided content. Be accurate and conservative in legal claims."""
 
-ÇIKARILAN DEĞERLER:
+        user_prompt = f"""Analyze the following contract. Use MCP tools for targeted legal research when needed.
+
+Extracted values (JSON):
 {extracted_json[:3000]}
 
-SÖZLEŞME METNİ:
+Contract text (truncated to fit model limits):
 {contract_text[:MAX_CONTRACT_LENGTH]}
 
-Sözleşme türüne göre gerekli mevzuat araştırmasını yap ve kapsamlı hukuki analiz hazırla."""
+Requirements:
+- Determine the contract type and governing laws.
+- Cite specific Turkish legislation and article numbers for each key issue.
+- Bold all extracted quantitative values.
+- Provide concrete risks and actionable recommendations aligned with Turkish law."""
 
         # Let LLM freely use tools
         llm_with_tools = llm.bind_tools(mcp_tools)
@@ -378,12 +411,21 @@ Sözleşme türüne göre gerekli mevzuat araştırmasını yap ve kapsamlı huk
         
         iteration = 0
         report_text = ""
+        report_parts: list[str] = []
+        last_tool_signatures = None
+        no_progress_counter = 0
         
         while iteration < MAX_TOOL_ITERATIONS:
             try:
                 response = await llm_with_tools.ainvoke(messages)
                 messages.append(response)
                 
+                # Accumulate any narrative content even when tools are called
+                if getattr(response, "content", None):
+                    content_text = response.content if isinstance(response.content, str) else str(response.content)
+                    if content_text.strip():
+                        report_parts.append(content_text)
+
                 if not response.tool_calls:
                     report_text = response.content
                     break
@@ -416,6 +458,26 @@ Sözleşme türüne göre gerekli mevzuat araştırmasını yap ve kapsamlı huk
                                 tool_call_id=tool_call["id"]
                             ))
                 
+                # Simple no-progress detection based on repeated tool call signatures
+                current_signatures = []
+                if response.tool_calls:
+                    for tool_call in response.tool_calls:
+                        try:
+                            sig = (tool_call.get("name"), json.dumps(tool_call.get("args", {}), ensure_ascii=False, sort_keys=True)[:200])
+                        except Exception:
+                            sig = (tool_call.get("name"), "")
+                        current_signatures.append(sig)
+
+                if current_signatures == last_tool_signatures:
+                    no_progress_counter += 1
+                else:
+                    no_progress_counter = 0
+                last_tool_signatures = current_signatures
+
+                if no_progress_counter >= 1:
+                    logger.info("Breaking out due to repeated identical tool calls (no progress)")
+                    break
+
                 iteration += 1
                 
             except Exception as e:
@@ -424,9 +486,10 @@ Sözleşme türüne göre gerekli mevzuat araştırmasını yap ve kapsamlı huk
         
         # If no report yet, request final report
         if not report_text:
-            final_prompt = "Araştırmaları tamamla ve Türkçe hukuki analiz raporunu hazırla. Çıkarılan değerleri kullan."
+            final_prompt = "Synthesize your findings and write the final Turkish legal analysis report now. Integrate the extracted values and tool insights. Bold all quantitative values. Cite each statute/article you relied on. End with prioritized, actionable recommendations."
             final_response = await llm.ainvoke(messages + [HumanMessage(content=final_prompt)])
-            report_text = final_response.content
+            base_narrative = "\n\n".join([p for p in report_parts if p.strip()])
+            report_text = (base_narrative + ("\n\n" if base_narrative else "") + (final_response.content or "")).strip()
         
         return report_text
         
@@ -443,31 +506,38 @@ async def perform_analysis_without_mcp(llm, contract_text, document_name, extrac
         # Convert extracted values to JSON
         extracted_json = json.dumps(extracted_values, ensure_ascii=False, indent=2)
         
-        # Dynamic prompt
-        system_prompt = """Sen deneyimli bir Türk hukuk müşavirisin. Sözleşmeleri detaylı analiz edip hukuki görüş hazırlıyorsun.
+        # English prompts (output remains Turkish)
+        system_prompt = """You are a senior Turkish contract lawyer. You do not have access to external legal databases in this session.
 
-Mevzuat veritabanına erişimin olmadığı için genel hukuk bilginle analiz yapacaksın.
+Objectives:
+- Classify the contract and analyze it under Turkish law using general knowledge.
+- Provide cautious, reasonable legal analysis; avoid unverifiable claims.
+- Bold all extracted quantitative values (amounts, dates, rates).
 
-ANALİZ YÖNTEMİ:
-1. Sözleşme türünü ve tarafları belirle
-2. Kritik hükümleri tespit et
-3. İlgili Türk hukuku kurallarını uygula
-4. Risk ve uyumsuzlukları belirle
-5. Somut öneriler sun
+Method:
+1) Identify parties, consideration, performance, and critical clauses.
+2) Map issues to the most likely applicable codes (TBK, TTK, etc.).
+3) Discuss legal implications, typical standards, and market/common practice.
+4) Flag risks, ambiguities, compliance issues, and negotiation points.
+5) Provide concrete, practical recommendations and drafting suggestions.
 
-Sözleşmeden çıkarılan tüm değerleri (tutarlar, tarihler, oranlar) **kalın** olarak vurgulayarak kullan.
+Output:
+- Fluent Turkish paragraphs.
+- Bold quantitative values.
+- Add a brief disclaimer that live legislation lookups were not performed."""
 
-Raporu sözleşmenin gerektirdiği derinlik ve kapsamda, akıcı paragraflar halinde yaz."""
+        user_prompt = f"""Analyze the following contract. No external legal databases are available in this session.
 
-        user_prompt = f"""Bu sözleşmeyi analiz et:
-
-ÇIKARILAN DEĞERLER:
+Extracted values (JSON):
 {extracted_json[:3000]}
 
-SÖZLEŞME METNİ:
+Contract text (truncated to fit model limits):
 {contract_text[:MAX_CONTRACT_LENGTH]}
 
-Sözleşme türüne uygun kapsamlı hukuki analiz hazırla. Çıkarılan değerleri mutlaka kullan."""
+Requirements:
+- Determine the contract type and governing laws.
+- Bold all extracted quantitative values.
+- Provide cautious but concrete risks and actionable recommendations."""
 
         messages = [
             SystemMessage(content=system_prompt),

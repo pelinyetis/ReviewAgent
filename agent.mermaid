@@ -1,0 +1,29 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	prepare_input("prepare_input<br/>📄 PDF Download & Extract<br/>UiPath Bucket → Text")
+	extract_queries("extract_queries<br/>🔍 Extract Key Terms<br/>Claude AI Analysis")
+	consult_mcp("consult_mcp<br/>🌐 MCP Legal Research<br/>search_mevzuat + content + tree<br/>4 Search Strategies")
+	generate_report("generate_report<br/>📝 Generate Report<br/>Claude + MCP References<br/>Turkish Legal Analysis")
+	output_node("output_node<br/>💾 Return PDF Path")
+	__end__([<p>__end__</p>]):::last
+	
+	mcp_server["🏛️ UiPath MCP Server<br/>mevzuat.gov.tr<br/>12 Mevzuat Types<br/>3 Tools Available"]
+	
+	__start__ --> prepare_input;
+	prepare_input --> extract_queries;
+	extract_queries --> consult_mcp;
+	consult_mcp -.->|"Builder.py Method<br/>StreamableHTTP Client"| mcp_server;
+	mcp_server -.->|"Legal Documents<br/>Article Content<br/>Document Tree"| consult_mcp;
+	consult_mcp --> generate_report;
+	generate_report --> output_node;
+	output_node --> __end__;
+	
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+	classDef mcp fill:#e8f5e8,stroke:#4caf50,stroke-width:2px

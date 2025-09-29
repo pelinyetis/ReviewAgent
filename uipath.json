@@ -1,0 +1,60 @@
+{
+    "entryPoints": [
+        {
+            "filePath": "agent",
+            "uniqueId": "3d9c78f3-d857-4dfd-b938-e618df4e6726",
+            "type": "agent",
+            "input": {
+                "type": "object",
+                "properties": {
+                    "document_name": {
+                        "title": "Document Name",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "document_name"
+                ]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "pdf_file_path": {
+                        "description": "Full path to the generated PDF report file",
+                        "title": "PDF File Path",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "pdf_file_path"
+                ]
+            }
+        }
+    ],
+    "bindings": {
+        "version": "2.0",
+        "resources": [
+            {
+                "resource": "bucket",
+                "key": "Shared.SB_Contracts",
+                "value": {
+                    "name": {
+                        "defaultValue": "SB_Contracts",
+                        "isExpression": false,
+                        "displayName": "Name"
+                    },
+                    "folderPath": {
+                        "defaultValue": "Shared",
+                        "isExpression": false,
+                        "displayName": "Folder Path"
+                    }
+                },
+                "metadata": {
+                    "ActivityName": "download",
+                    "BindingsVersion": "2.2",
+                    "DisplayLabel": "FullName"
+                }
+            }
+        ]
+    }
+}
